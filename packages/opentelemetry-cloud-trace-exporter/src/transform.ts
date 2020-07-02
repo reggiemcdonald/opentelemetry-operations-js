@@ -84,7 +84,7 @@ function transformStatus(status: ot.Status): rpc.Status {
 function transformLinks(links: ot.Link[]): cloudtracev2.Span.Links {
   return cloudtracev2.Span.Links.create({
     link: links.map(transformLink),
-  })
+  });
 }
 
 function transformLink(link: ot.Link): cloudtracev2.Span.Link {

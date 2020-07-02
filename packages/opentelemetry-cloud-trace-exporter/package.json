@@ -51,7 +51,6 @@
     "typescript": "3.9.5"
   },
   "dependencies": {
-    "@grpc/proto-loader": "^0.5.4",
     "@opentelemetry/api": "^0.7.0",
     "@opentelemetry/base": "^0.7.0",
     "@opentelemetry/core": "^0.7.0",

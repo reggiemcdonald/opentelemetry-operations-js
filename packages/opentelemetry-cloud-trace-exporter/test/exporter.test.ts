@@ -81,7 +81,6 @@ describe('Google Cloud Trace Exporter', () => {
           requestData: Uint8Array,
           metadata: grpc.Metadata,
           options: grpc.CallOptions,
-          /* (err: Error | null, result: Uint8Array | null)*/
           callback: (err: Error | null, result: Uint8Array | null) => void
         ) => {
           if (batchWriteShouldFail) {

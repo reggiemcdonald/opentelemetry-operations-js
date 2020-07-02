@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * Generates the .js and .d.ts files bundles for the JS files
+ * Generates the .js and .d.ts file bundles from the proto files
  */
 
 const pbjs = require('protobufjs/cli/pbjs');
