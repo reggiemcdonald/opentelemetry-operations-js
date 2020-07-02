@@ -10,7 +10,7 @@
     "lint": "gts check",
     "lint:fix": "gts fix",
     "clean": "rimraf build/*",
-    "compile": "tsc -p .",
+    "compile": "node compile-protos.js && tsc -p .",
     "prepare": "npm run compile",
     "test": "nyc ts-mocha -p tsconfig.json 'test/**/*.test.ts'"
   },
@@ -59,6 +59,12 @@
     "@opentelemetry/tracing": "^0.7.0",
     "google-auth-library": "^5.7.0",
     "google-proto-files": "^2.1.0",
-    "grpc": "^1.24.3"
+    "grpc": "^1.24.3",
+    "protobufjs": "^6.9.0"
+  },
+  "nyc": {
+    "exclude": [
+      "src/proto-bundle.*"
+    ]
   }
 }

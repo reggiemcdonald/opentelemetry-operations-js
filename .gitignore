@@ -43,3 +43,6 @@ docs
 # lock files
 package-lock.json
 packages/**/package-lock.json
+
+# proto files
+packages/**/proto-bundle.*
