@@ -21,10 +21,9 @@ import { ReadableSpan } from '@opentelemetry/tracing';
 import * as assert from 'assert';
 import * as nock from 'nock';
 import * as sinon from 'sinon';
-import * as protoloader from '@grpc/proto-loader';
 import * as grpc from 'grpc';
 import { TraceExporter } from '../src';
-import { TraceService } from '../src/types'
+import { cloudtracev2, protobuf } from '../src/types';
 
 describe('Google Cloud Trace Exporter', () => {
   beforeEach(() => {
@@ -51,8 +50,11 @@ describe('Google Cloud Trace Exporter', () => {
     let exporter: TraceExporter;
     let logger: ConsoleLogger;
     /* tslint:disable-next-line:no-any */
-    let batchWrite: sinon.SinonSpy<[any, any], any>;
-    let traceServiceConstructor: sinon.SinonSpy;
+    let makeUnaryRequest: sinon.SinonSpy<
+      [any, any, any, any, any, any, any],
+      any
+    >;
+    let grpcClientConstructor: sinon.SinonSpy;
     let debug: sinon.SinonSpy;
     let info: sinon.SinonSpy;
     let warn: sinon.SinonSpy;
@@ -68,16 +70,27 @@ describe('Google Cloud Trace Exporter', () => {
         logger,
       });
 
-      batchWrite = sinon.spy(
-        /* tslint:disable-next-line:no-any */
-        (spans: any, callback: (err: Error | null) => void): any => {
+      makeUnaryRequest = sinon.spy(
+        <Req, Res>(
+          /* method name */
+          method: string,
+          /* serialization and deserialization functions */
+          serialize: grpc.serialize<Req>,
+          deserialize: grpc.deserialize<Res>,
+          /* request as buffer */
+          requestData: Uint8Array,
+          metadata: grpc.Metadata,
+          options: grpc.CallOptions,
+          /* (err: Error | null, result: Uint8Array | null)*/
+          callback: (err: Error | null, result: Uint8Array | null) => void
+        ) => {
           if (batchWriteShouldFail) {
-            callback(new Error('fail'));
+            callback(new Error('fail'), null);
           } else {
-            callback(null);
+            /* tslint:disable-next-line:no-any */
+            callback(null, protobuf.Empty.create() as any);
           }
-        }
-      );
+      });
 
       sinon.replace(exporter['_auth'], 'getClient', () => {
         if (getClientShouldFail) {
@@ -87,31 +100,8 @@ describe('Google Cloud Trace Exporter', () => {
         return {} as any;
       });
 
-      sinon.stub(protoloader, "loadSync");
-
-      sinon.replace(grpc, 'loadPackageDefinition', (): grpc.GrpcObject => {
-        traceServiceConstructor =
-          sinon.spy((host: string, creds: grpc.ChannelCredentials) => {});
-        /* tslint:disable-next-line:no-any */
-        const def: any = {
-          google: {
-            devtools: {
-              cloudtrace: {
-                v2: {},
-              }
-            }
-          }
-        };
-        // Replace the TraceService with a mock TraceService
-        def.google.devtools.cloudtrace.v2.TraceService =
-          class MockTraceService implements TraceService {
-            BatchWriteSpans = batchWrite;
-            constructor(host: string, creds: grpc.ChannelCredentials) {
-              traceServiceConstructor(host, creds);
-            }
-          };
-        return def;
-      });
+      grpcClientConstructor = sinon.spy(grpc, 'Client');
+      sinon.replace(grpc.Client.prototype, 'makeUnaryRequest', makeUnaryRequest);
 
       debug = sinon.spy();
       info = sinon.spy();
@@ -149,18 +139,22 @@ describe('Google Cloud Trace Exporter', () => {
         resource: Resource.empty(),
       };
 
-      const result = await new Promise((resolve, reject) => {
+      const result = await new Promise(resolve => {
         exporter.export([readableSpan], result => {
           resolve(result);
         });
       });
-
+      
+      const request = cloudtracev2.BatchWriteSpansRequest.decode(
+        makeUnaryRequest.getCall(0).args[3]
+      );
       assert.deepStrictEqual(
-        batchWrite.getCall(0).args[0].spans[0].displayName.value,
+        request.spans[0].displayName!.value,
         'my-span'
       );
-      assert.strictEqual(traceServiceConstructor.getCalls().length, 1);
-      assert.strictEqual(traceServiceConstructor.getCall(0).args[0], 'cloudtrace.googleapis.com:443');
+      
+      assert.strictEqual(grpcClientConstructor.getCalls().length, 1);
+      assert.strictEqual(grpcClientConstructor.getCall(0).args[0], 'cloudtrace.googleapis.com');
       assert.deepStrictEqual(result, ExportResult.SUCCESS);
     });
 
@@ -197,9 +191,43 @@ describe('Google Cloud Trace Exporter', () => {
         });
       });
 
+      assert.strictEqual(grpcClientConstructor.getCalls().length, 1);
+    });
 
-      assert.strictEqual(traceServiceConstructor.getCalls().length, 1);
-    })
+    it('should pass correct serialization functions',async () => {
+      const readableSpan: ReadableSpan = {
+        attributes: {},
+        duration: [32, 800000000],
+        startTime: [1566156729, 709],
+        endTime: [1566156731, 709],
+        ended: true,
+        events: [],
+        kind: types.SpanKind.CLIENT,
+        links: [],
+        name: 'my-span',
+        spanContext: {
+          traceId: 'd4cda95b652f4a1592b449d5929fda1b',
+          spanId: '6e0c63257de34c92',
+          traceFlags: TraceFlags.NONE,
+          isRemote: true,
+        },
+        status: { code: types.CanonicalCode.OK },
+        resource: Resource.empty(),
+      };
+
+      await new Promise((resolve, reject) => {
+        exporter.export([readableSpan], result => {
+          resolve(result);
+        });
+      });
+
+      const serialize = makeUnaryRequest.getCall(0).args[1];
+      const deserialize = makeUnaryRequest.getCall(0).args[2];
+      
+      assert.strictEqual(makeUnaryRequest.getCalls().length, 1);
+      assert.deepStrictEqual(serialize(''), Buffer.from(''));
+      assert.deepStrictEqual(deserialize(Buffer.from('')), Buffer.from(''));
+    });
 
     it('should return not retryable if authorization fails', async () => {
       const readableSpan: ReadableSpan = {
@@ -230,7 +258,7 @@ describe('Google Cloud Trace Exporter', () => {
         });
       });
       assert(error.getCall(0).args[0].match(/authorize error: fail/));
-      assert.strictEqual(traceServiceConstructor.getCalls().length, 1)
+      assert.strictEqual(grpcClientConstructor.getCalls().length, 0)
       assert.deepStrictEqual(result, ExportResult.FAILED_NOT_RETRYABLE);
     });
 

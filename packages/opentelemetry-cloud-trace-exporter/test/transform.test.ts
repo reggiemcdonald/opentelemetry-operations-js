@@ -18,12 +18,16 @@ import { Resource } from '@opentelemetry/resources';
 import { ReadableSpan } from '@opentelemetry/tracing';
 import * as assert from 'assert';
 import { getReadableSpanTransformer } from '../src/transform';
-import { LinkType, Span } from '../src/types';
+import { 
+  cloudtracev2,
+  protobuf,
+  rpc,
+} from '../src/types';
 import { VERSION } from '../src/version';
 
 describe('transform', () => {
   let readableSpan: ReadableSpan;
-  let transformer: (readableSpan: ReadableSpan) => Span;
+  let transformer: (readableSpan: ReadableSpan) => cloudtracev2.Span;
   let spanContext: types.SpanContext;
 
   beforeEach(() => {
@@ -58,34 +62,52 @@ describe('transform', () => {
 
   it('should transform spans', () => {
     const result = transformer(readableSpan);
-
-    assert.deepStrictEqual(result, {
-      attributes: {
-        attributeMap: {
-          project_id: { stringValue: { value: 'project-id' } },
-          'g.co/agent': {
-            stringValue: {
-              value: `opentelemetry-js ${CORE_VERSION}; google-cloud-trace-exporter ${VERSION}`,
-            },
-          },
-          cost: { intValue: '112' },
-          service: { stringValue: { value: 'ui' } },
-          version: { intValue: '1' },
-        },
-        droppedAttributesCount: 0,
+    const attributes = cloudtracev2.Span.Attributes.create({
+      attributeMap: {
+        project_id: cloudtracev2.AttributeValue.create({
+          stringValue: cloudtracev2.TruncatableString.create({
+            value: 'project-id',
+          }),
+        }),
+        'g.co/agent': cloudtracev2.AttributeValue.create({
+          stringValue: cloudtracev2.TruncatableString.create({
+            value: `opentelemetry-js ${CORE_VERSION}; google-cloud-trace-exporter ${VERSION}`,
+          }),
+        }),
+        cost: cloudtracev2.AttributeValue.create({
+          intValue: 112,
+        }),
+        service: cloudtracev2.AttributeValue.create({
+          stringValue: cloudtracev2.TruncatableString.create({
+            value: 'ui',
+          }),
+        }),
+        version: cloudtracev2.AttributeValue.create({
+          intValue: 1,
+        }),
       },
-      displayName: { value: 'my-span' },
-      links: { link: [] },
-      endTime: { seconds: 1566156731, nanos: 709 },
-      startTime: { seconds: 1566156729, nanos: 709 },
-      name:
-        'projects/project-id/traces/d4cda95b652f4a1592b449d5929fda1b/spans/6e0c63257de34c92',
-      spanId: '6e0c63257de34c92',
-      status: { code: 0 },
-      timeEvents: { timeEvent: [] },
-      sameProcessAsParentSpan: { value: false },
+      droppedAttributesCount: 0,
     });
+    const expectedSpan = cloudtracev2.Span.create({
+      attributes,
+      displayName: cloudtracev2.TruncatableString.create({
+        value: 'my-span',
+      }),
+      links: cloudtracev2.Span.Links.create(),
+      endTime: protobuf.Timestamp.create({ seconds: 1566156731, nanos: 709 }),
+      startTime: protobuf.Timestamp.create({ seconds: 1566156729, nanos: 709 }),
+      name: 'projects/project-id/traces/d4cda95b652f4a1592b449d5929fda1b/spans/6e0c63257de34c92',
+      spanId: '6e0c63257de34c92',
+      status: rpc.Status.create({
+        code: 0,
+      }),
+      timeEvents: cloudtracev2.Span.TimeEvents.create(),
+      sameProcessAsParentSpan: protobuf.BoolValue.create({ value: false }),
+    });
+
+    assert.deepStrictEqual(result, expectedSpan);
   });
+
   it('should transform spans with parent', () => {
     /* tslint:disable-next-line:no-any */
     (readableSpan as any).parentSpanId = '3e0c63257de34c92';
@@ -95,18 +117,22 @@ describe('transform', () => {
 
   it('should transform spans without parent', () => {
     const result = transformer(readableSpan);
-    assert.deepStrictEqual(result.parentSpanId, undefined);
+    assert.deepStrictEqual(result.parentSpanId, '');
   });
 
   it('should transform remote spans', () => {
     const remote = transformer(readableSpan);
-    assert.deepStrictEqual(remote.sameProcessAsParentSpan, { value: false });
+    assert.deepStrictEqual(remote.sameProcessAsParentSpan, protobuf.BoolValue.create({
+      value: false,
+    }));
   });
 
   it('should transform local spans', () => {
     readableSpan.spanContext.isRemote = false;
     const local = transformer(readableSpan);
-    assert.deepStrictEqual(local.sameProcessAsParentSpan, { value: true });
+    assert.deepStrictEqual(local.sameProcessAsParentSpan, protobuf.BoolValue.create({
+      value: true,
+    }));
   });
 
   it('should transform attributes', () => {
@@ -115,16 +141,17 @@ describe('transform', () => {
     readableSpan.attributes.testString = 'str';
 
     const result = transformer(readableSpan);
+    const attributeMap = result.attributes!.attributeMap!;
 
-    assert.deepStrictEqual(result.attributes!.attributeMap!.testBool, {
+    assert.deepStrictEqual(attributeMap.testBool, cloudtracev2.AttributeValue.create({
       boolValue: true,
-    });
-    assert.deepStrictEqual(result.attributes!.attributeMap!.testInt, {
-      intValue: '3',
-    });
-    assert.deepStrictEqual(result.attributes!.attributeMap!.testString, {
-      stringValue: { value: 'str' },
-    });
+    }));
+    assert.deepStrictEqual(attributeMap.testInt, cloudtracev2.AttributeValue.create({
+      intValue: 3,
+    }));
+    assert.deepStrictEqual(attributeMap.testString, cloudtracev2.AttributeValue.create({
+      stringValue: cloudtracev2.TruncatableString.create({ value: 'str' }),
+    }));
     assert.deepStrictEqual(result.attributes!.droppedAttributesCount, 0);
   });
 
@@ -147,20 +174,20 @@ describe('transform', () => {
     });
 
     const result = transformer(readableSpan);
-
-    assert.deepStrictEqual(result.links, {
-      link: [
-        {
-          attributes: {
-            attributeMap: {},
-            droppedAttributesCount: 0,
-          },
-          traceId: 'a4cda95b652f4a1592b449d5929fda1b',
-          spanId: '3e0c63257de34c92',
-          type: LinkType.UNSPECIFIED,
-        },
-      ],
+    
+    const expectedLink = cloudtracev2.Span.Link.create({
+      attributes: cloudtracev2.Span.Attributes.create({
+        attributeMap: {},
+        droppedAttributesCount: 0,
+      }),
+      traceId: 'a4cda95b652f4a1592b449d5929fda1b',
+      spanId: '3e0c63257de34c92',
+      type: cloudtracev2.Span.Link.Type.TYPE_UNSPECIFIED,
     });
+    const expectedLinks = cloudtracev2.Span.Links.create({
+      link: [expectedLink]
+    });
+    assert.deepStrictEqual(result.links, expectedLinks);
   });
 
   it('should transform links with attributes', () => {
@@ -176,26 +203,25 @@ describe('transform', () => {
     });
 
     const result = transformer(readableSpan);
-
-    assert.deepStrictEqual(result.links, {
-      link: [
-        {
-          attributes: {
-            attributeMap: {
-              testAttr: {
-                stringValue: {
-                  value: 'value',
-                },
-              },
-            },
-            droppedAttributesCount: 1,
-          },
-          traceId: 'a4cda95b652f4a1592b449d5929fda1b',
-          spanId: '3e0c63257de34c92',
-          type: LinkType.UNSPECIFIED,
+    const expectedLink = cloudtracev2.Span.Link.create({
+      attributes: cloudtracev2.Span.Attributes.create({
+        attributeMap: {
+          testAttr: cloudtracev2.AttributeValue.create({
+            stringValue: cloudtracev2.TruncatableString.create({value: 'value'})
+          }),
         },
-      ],
+        droppedAttributesCount: 1,
+      }),
+      traceId: 'a4cda95b652f4a1592b449d5929fda1b',
+      spanId: '3e0c63257de34c92',
+      type: cloudtracev2.Span.Link.Type.TYPE_UNSPECIFIED,
     });
+    const expectedLinks = cloudtracev2.Span.Links.create({
+      link: [expectedLink],
+    })
+    
+
+    assert.deepStrictEqual(result.links, expectedLinks);
   });
 
   it('should transform events', () => {
@@ -205,23 +231,26 @@ describe('transform', () => {
     });
 
     const result = transformer(readableSpan);
-
-    assert.deepStrictEqual(result.timeEvents, {
-      timeEvent: [
-        {
-          annotation: {
-            attributes: {
-              attributeMap: {},
-              droppedAttributesCount: 0,
-            },
-            description: {
-              value: 'something happened',
-            },
-          },
-          time: { seconds: 1566156729, nanos: 809 },
-        },
-      ],
+    const expectedTimeEvent = cloudtracev2.Span.TimeEvent.create({
+      annotation: cloudtracev2.Span.TimeEvent.Annotation.create({
+        attributes: cloudtracev2.Span.Attributes.create({
+          attributeMap: {},
+          droppedAttributesCount: 0,
+        }),
+        description: cloudtracev2.TruncatableString.create({
+          value: 'something happened',
+        })
+      }),
+      time: protobuf.Timestamp.create({
+        seconds: 1566156729,
+        nanos: 809,
+      }) 
     });
+    const expectedTimeEvents = cloudtracev2.Span.TimeEvents.create({
+      timeEvent: [expectedTimeEvent],
+    });
+
+    assert.deepStrictEqual(result.timeEvents, expectedTimeEvents);
   });
 
   it('should transform events with attributes', () => {
@@ -235,26 +264,29 @@ describe('transform', () => {
     });
 
     const result = transformer(readableSpan);
-
-    assert.deepStrictEqual(result.timeEvents, {
-      timeEvent: [
-        {
-          annotation: {
-            attributes: {
-              attributeMap: {
-                error: {
-                  boolValue: true,
-                },
-              },
-              droppedAttributesCount: 1,
-            },
-            description: {
-              value: 'something happened',
-            },
+    const expectedTimeEvent = cloudtracev2.Span.TimeEvent.create({
+      annotation: cloudtracev2.Span.TimeEvent.Annotation.create({
+        attributes: cloudtracev2.Span.Attributes.create({
+          attributeMap: {
+            error: cloudtracev2.AttributeValue.create({
+              boolValue: true,
+            }),
           },
-          time: { seconds: 1566156729, nanos: 809 },
-        },
-      ],
+          droppedAttributesCount: 1,
+        }),
+        description: cloudtracev2.TruncatableString.create({
+          value: 'something happened',
+        }),
+      }),
+      time: protobuf.Timestamp.create({
+        seconds: 1566156729,
+        nanos: 809,
+      }),
     });
+    const expectedTimeEvents = cloudtracev2.Span.TimeEvents.create({
+      timeEvent: [expectedTimeEvent],
+    });
+
+    assert.deepStrictEqual(result.timeEvents, expectedTimeEvents);
   });
 });

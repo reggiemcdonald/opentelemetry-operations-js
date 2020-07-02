@@ -17,23 +17,19 @@ import { VERSION as CORE_VERSION } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import { ReadableSpan } from '@opentelemetry/tracing';
 import {
-  AttributeMap,
-  Attributes,
-  AttributeValue,
-  Link,
-  LinkType,
-  Span,
-  Timestamp,
-  TruncatableString,
+  cloudtracev2,
+  protobuf,
+  rpc,
 } from './types';
 import { VERSION } from './version';
+
 
 const AGENT_LABEL_KEY = 'g.co/agent';
 const AGENT_LABEL_VALUE = `opentelemetry-js ${CORE_VERSION}; google-cloud-trace-exporter ${VERSION}`;
 
 export function getReadableSpanTransformer(
   projectId: string
-): (span: ReadableSpan) => Span {
+): (span: ReadableSpan) => cloudtracev2.Span {
   return span => {
     const attributes = transformAttributes(
       span.attributes,
@@ -44,28 +40,18 @@ export function getReadableSpanTransformer(
       span.resource
     );
 
-    const out: Span = {
+    const out = cloudtracev2.Span.create({
       attributes,
       displayName: stringToTruncatableString(span.name),
-      links: {
-        link: span.links.map(transformLink),
-      },
+      links: transformLinks(span.links),
       endTime: transformTime(span.endTime),
       startTime: transformTime(span.startTime),
       name: `projects/${projectId}/traces/${span.spanContext.traceId}/spans/${span.spanContext.spanId}`,
       spanId: span.spanContext.spanId,
-      sameProcessAsParentSpan: { value: !span.spanContext.isRemote },
-      status: span.status,
-      timeEvents: {
-        timeEvent: span.events.map(e => ({
-          time: transformTime(e.time),
-          annotation: {
-            attributes: transformAttributes(e.attributes),
-            description: stringToTruncatableString(e.name),
-          },
-        })),
-      },
-    };
+      sameProcessAsParentSpan: transformBool(!span.spanContext.isRemote),
+      status: transformStatus(span.status),
+      timeEvents: transformTimeEvents(span.events),
+    });
 
     if (span.parentSpanId) {
       out.parentSpanId = span.parentSpanId;
@@ -75,27 +61,46 @@ export function getReadableSpanTransformer(
   };
 }
 
-function transformTime(time: ot.HrTime): Timestamp {
-  return {
-    seconds: time[0],
-    nanos: time[1],
-  };
+function transformBool(value: boolean): protobuf.BoolValue {
+  return protobuf.BoolValue.create({
+    value,
+  });
 }
 
-function transformLink(link: ot.Link): Link {
-  return {
+function transformTime(time: ot.HrTime): protobuf.Timestamp {
+  return protobuf.Timestamp.create({
+    seconds: time[0],
+    nanos: time[1],
+  });
+}
+
+function transformStatus(status: ot.Status): rpc.Status {
+  return rpc.Status.create({
+    code: status.code,
+    message: status.message,
+  });
+}
+
+function transformLinks(links: ot.Link[]): cloudtracev2.Span.Links {
+  return cloudtracev2.Span.Links.create({
+    link: links.map(transformLink),
+  })
+}
+
+function transformLink(link: ot.Link): cloudtracev2.Span.Link {
+  return cloudtracev2.Span.Link.create({
     attributes: transformAttributes(link.attributes),
     spanId: link.context.spanId,
     traceId: link.context.traceId,
-    type: LinkType.UNSPECIFIED,
-  };
+    type: cloudtracev2.Span.Link.Type.TYPE_UNSPECIFIED,
+  });
 }
 
 function transformAttributes(
   requestAttributes: ot.Attributes = {},
   serviceAttributes: ot.Attributes = {},
   resource: Resource = Resource.empty()
-): Attributes {
+): cloudtracev2.Span.Attributes {
   const attributes = Object.assign(
     {},
     requestAttributes,
@@ -104,16 +109,16 @@ function transformAttributes(
   );
 
   const attributeMap = transformAttributeValues(attributes);
-  return {
+  return cloudtracev2.Span.Attributes.create({
     attributeMap,
     // @todo get dropped attribute count from sdk ReadableSpan
     droppedAttributesCount:
       Object.keys(attributes).length - Object.keys(attributeMap).length,
-  };
+  });
 }
 
-function transformAttributeValues(attributes: ot.Attributes): AttributeMap {
-  const out: AttributeMap = {};
+function transformAttributeValues(attributes: ot.Attributes): {[key: string]: cloudtracev2.AttributeValue} {
+  const out: {[key: string]: cloudtracev2.AttributeValue} = {};
   for (const [key, value] of Object.entries(attributes)) {
     switch (typeof value) {
       case 'number':
@@ -128,22 +133,42 @@ function transformAttributeValues(attributes: ot.Attributes): AttributeMap {
   return out;
 }
 
-function stringToTruncatableString(value: string): TruncatableString {
-  return { value };
+function stringToTruncatableString(value: string): cloudtracev2.TruncatableString {
+  return cloudtracev2.TruncatableString.create({
+    value,
+  });
 }
 
 function valueToAttributeValue(
   value: string | number | boolean
-): AttributeValue {
+): cloudtracev2.AttributeValue {
+  const attributeValue = cloudtracev2.AttributeValue.create();
   switch (typeof value) {
     case 'number':
       // TODO: Consider to change to doubleValue when available in V2 API.
-      return { intValue: String(Math.round(value)) };
+      attributeValue.intValue = Math.round(value);
+      break;
     case 'boolean':
-      return { boolValue: value };
+      attributeValue.boolValue = value;
+      break;
     case 'string':
-      return { stringValue: stringToTruncatableString(value) };
-    default:
-      return {};
+      attributeValue.stringValue = stringToTruncatableString(value);
   }
+  return attributeValue;
+}
+
+function transformTimeEvents(events: ot.TimedEvent[]): cloudtracev2.Span.TimeEvents {
+  return cloudtracev2.Span.TimeEvents.create({
+    timeEvent: events.map(transformTimeEvent),
+  });
+}
+
+function transformTimeEvent(event: ot.TimedEvent): cloudtracev2.Span.TimeEvent {
+  return cloudtracev2.Span.TimeEvent.create({
+    time: transformTime(event.time),
+    annotation: cloudtracev2.Span.TimeEvent.Annotation.create({
+      attributes: transformAttributes(event.attributes),
+      description: stringToTruncatableString(event.name),
+    }),
+  });
 }

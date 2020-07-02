@@ -16,13 +16,11 @@ import { ExportResult } from '@opentelemetry/base';
 import { NoopLogger } from '@opentelemetry/core';
 import { ReadableSpan, SpanExporter } from '@opentelemetry/tracing';
 import { Logger } from '@opentelemetry/api';
-import * as protoloader from '@grpc/proto-loader';
-import * as protofiles from 'google-proto-files';
 import * as grpc from 'grpc';
 import { GoogleAuth } from 'google-auth-library';
 import { TraceExporterOptions } from './external-types';
 import { getReadableSpanTransformer } from './transform';
-import { TraceService, NamedSpans } from './types';
+import { cloudtracev2 } from './types';
 
 /**
  * Format and sends span information to Google Cloud Trace.
@@ -31,7 +29,7 @@ export class TraceExporter implements SpanExporter {
   private _projectId: string | void | Promise<string | void>;
   private readonly _logger: Logger;
   private readonly _auth: GoogleAuth;
-  private _traceServiceClient?: TraceService = undefined;
+  private _traceServiceClient?: cloudtracev2.TraceService = undefined;
 
   constructor(options: TraceExporterOptions = {}) {
     this._logger = options.logger || new NoopLogger();
@@ -69,12 +67,12 @@ export class TraceExporter implements SpanExporter {
 
     this._logger.debug('Google Cloud Trace export');
 
-    const namedSpans: NamedSpans = {
+    const request = cloudtracev2.BatchWriteSpansRequest.create({
       name: `projects/${this._projectId}`,
       spans: spans.map(getReadableSpanTransformer(this._projectId)),
-    };
+    });
 
-    const result = await this._batchWriteSpans(namedSpans);
+    const result = await this._batchWriteSpans(request);
     resultCallback(result);
   }
 
@@ -85,7 +83,7 @@ export class TraceExporter implements SpanExporter {
    * service.
    * @param spans
    */
-  private _batchWriteSpans(spans: NamedSpans): Promise<ExportResult> {
+  private _batchWriteSpans(request: cloudtracev2.BatchWriteSpansRequest): Promise<ExportResult> {
     this._logger.debug('Google Cloud Trace batch writing traces');
     // Always resolve with the ExportResult code
     return new Promise(async resolve => {
@@ -98,8 +96,8 @@ export class TraceExporter implements SpanExporter {
           return resolve(ExportResult.FAILED_NOT_RETRYABLE);
         }
       }
-
-      this._traceServiceClient.BatchWriteSpans(spans, (err: Error) => {
+      
+      this._traceServiceClient.batchWriteSpans(request, (err: Error | null) => {
         if (err) {
           err.message = `batchWriteSpans error: ${err.message}`;
           this._logger.error(err.message);
@@ -117,26 +115,29 @@ export class TraceExporter implements SpanExporter {
    * If the rpc client is not already initialized,
    * authenticates with google credentials and initializes the rpc client
    */
-  private async _getClient(): Promise<TraceService> {
+  private async _getClient(): Promise<cloudtracev2.TraceService> {
     this._logger.debug('Google Cloud Trace authenticating');
     const creds = await this._auth.getClient();
     this._logger.debug(
       'Google Cloud Trace got authentication. Initializaing rpc client'
     );
-    const packageDefinition = protoloader.loadSync(
-      protofiles.getProtoPath('devtools', 'cloudtrace', 'v2', 'tracing.proto'),
-      {
-        includeDirs: [protofiles.getProtoPath('..')],
-      }
-    );
-    /* tslint:disable-next-line:no-any */
-    const { google }: any = grpc.loadPackageDefinition(packageDefinition);
-    const traceService = google.devtools.cloudtrace.v2.TraceService;
     const sslCreds = grpc.credentials.createSsl();
     const callCreds = grpc.credentials.createFromGoogleCredential(creds);
-    return new traceService(
-      'cloudtrace.googleapis.com:443',
-      grpc.credentials.combineChannelCredentials(sslCreds, callCreds)
+    const grpcClient = new grpc.Client(
+      'cloudtrace.googleapis.com',
+      grpc.credentials.combineChannelCredentials(sslCreds, callCreds)  
     );
+    const trace = new cloudtracev2.TraceService((method, requestData, callback) => {
+      grpcClient.makeUnaryRequest(
+        `/google.devtools.cloudtrace.v2.TraceService/${method.name}`,
+        arg => Buffer.from(arg),
+        arg => arg,
+        requestData,
+        null,
+        null,
+        callback
+      );
+    });
+    return trace;
   }
 }
